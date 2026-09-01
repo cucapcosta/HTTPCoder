@@ -32,13 +32,16 @@ export function createRelayServer(options: RelayServerOptions = {}): RelayServer
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
-    if (req.method === 'GET' && url.pathname === '/health') {
+    // HEAD é tratado como GET (o Node suprime o corpo sozinho) — curl -I e healthchecks usam HEAD.
+    const isGet = req.method === 'GET' || req.method === 'HEAD';
+
+    if (isGet && url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('ok');
       return;
     }
 
-    if (req.method === 'GET' && (url.pathname === '/download/host' || url.pathname === '/download/consumer')) {
+    if (isGet && (url.pathname === '/download/host' || url.pathname === '/download/consumer')) {
       const envName = url.pathname === '/download/host' ? 'HOST_ASSET_URL' : 'CONSUMER_ASSET_URL';
       const target = process.env[envName];
       if (!target) {

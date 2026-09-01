@@ -100,6 +100,17 @@ describe('rotas HTTP', () => {
     expect(res.status).toBe(503);
     expect(await res.text()).toContain('CONSUMER_ASSET_URL');
   });
+
+  it('HEAD é tratado como GET nas rotas HTTP', async () => {
+    vi.stubEnv('HOST_ASSET_URL', 'https://example.com/host.exe');
+
+    const health = await fetch(`${baseUrl}/health`, { method: 'HEAD' });
+    expect(health.status).toBe(200);
+
+    const download = await fetch(`${baseUrl}/download/host`, { method: 'HEAD', redirect: 'manual' });
+    expect(download.status).toBe(302);
+    expect(download.headers.get('location')).toBe('https://example.com/host.exe');
+  });
 });
 
 describe('relay WebSocket', () => {
