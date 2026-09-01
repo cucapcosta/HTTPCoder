@@ -74,8 +74,8 @@ e devem ser conferidos contra o código quando ele existir.
 | `serverUrl` | WebSocket do relay, ex. `wss://<app>.up.railway.app/ws` |
 | `roomCode` | Código da sala (8+ caracteres); igual no host e no consumer |
 | `ollamaUrl` | API do Ollama local (default `http://localhost:11434`) |
-| `model` | Modelo default usado quando o consumer não escolhe outro |
-| `fingerprint` | Pin TOFU do fingerprint da sessão; preenchido na 1ª conexão confirmada, alerta se mudar |
+| `defaultModel` | Modelo default usado quando o consumer não escolhe outro |
+| `fingerprintPin` | Pin TOFU do fingerprint da sessão; preenchido na 1ª conexão confirmada, alerta se mudar |
 
 ### `consumer.config.json`
 
@@ -83,16 +83,17 @@ e devem ser conferidos contra o código quando ele existir.
 |---|---|
 | `serverUrl` | Mesmo `serverUrl` do host |
 | `roomCode` | Mesmo código de sala do host |
-| `port` | Porta da web GUI local (localhost); troque se estiver bloqueada/ocupada |
+| `guiPort` | Porta da web GUI local (localhost, default 4173); troque se estiver bloqueada/ocupada |
 | `allowedPaths` | Pastas onde o agente pode ler/escrever arquivos (sandbox) |
-| `allowedCommands` | Allowlist de comandos executáveis (ex. `git status`, `npm test`) |
-| `fingerprint` | Pin TOFU, mesmo esquema do host |
+| `allowedCommands` | Allowlist de executáveis (ex. `git`, `npm`) — `run_command` só roda o primeiro token se estiver aqui |
+| `fingerprintPin` | Pin TOFU, mesmo esquema do host |
 
-## 4. Pendências do primeiro run real
+## 4. Pendências verificadas no primeiro run real (v0.1.0)
 
-- Os apps ainda não têm `src/index.ts` — o workflow falha até que host e consumer
-  existam. Idem `apps/consumer/web/main.tsx` (build:web) e `public/index.html`.
+- Workflow de release executado com sucesso na tag `v0.1.0` — 3 assets publicados.
+- Deploy no Railway verificado em produção: `/health` responde `ok` e as rotas de
+  download retornam 302 para os assets.
+- O server lê `process.env.PORT` (o Railway injeta) — confirmado em produção.
 - O workflow usa `bun install` (gera `bun.lock` na CI); a resolução pode divergir
   levemente do `package-lock.json`. Se for problema, commitar o `bun.lock`.
-- Conferir se o server lê `process.env.PORT` (o Railway injeta; sem isso o deploy não sobe).
 - Validar no Windows real que o consumer encontra `public/` relativo ao `.exe`.
