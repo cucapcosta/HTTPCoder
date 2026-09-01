@@ -1,0 +1,26 @@
+{
+  "name": "@httpcoder/consumer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "httpcoder-consumer": "src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build:web": "esbuild web/main.tsx --bundle --minify --outfile=public/app.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@httpcoder/protocol": "*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.25.0"
+  }
+}

@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da release (ex.: v0.1.0). Obrigatório no dispatch manual.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Host: Linux + Windows
+          - app: host
+            os: ubuntu-latest
+            target: bun-linux-x64
+            binary: httpcoder-host-linux-x64
+            artifact: httpcoder-host-linux-x64
+          - app: host
+            os: windows-latest
+            target: bun-windows-x64
+            binary: httpcoder-host-windows-x64.exe
+            artifact: httpcoder-host-windows-x64.exe
+          # Consumer: só Windows. O artefato é um .zip com o .exe + estáticos (public/)
+          - app: consumer
+            os: windows-latest
+            target: bun-windows-x64
+            binary: httpcoder-consumer-windows-x64.exe
+            artifact: httpcoder-consumer-windows-x64.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Instalar dependências
+        run: bun install
+
+      - name: Build da web GUI do consumer (public/app.js)
+        if: matrix.app == 'consumer'
+        run: npm run build:web -w apps/consumer
+
+      - name: Compilar binário standalone
+        run: bun build --compile --target=${{ matrix.target }} apps/${{ matrix.app }}/src/index.ts --outfile dist/${{ matrix.binary }}
+
+      # O binário compilado com bun não embute arquivos soltos do disco; por isso os
+      # estáticos da web GUI (apps/consumer/public/) viajam no .zip ao lado do .exe.
+      # O consumer deve resolver os estáticos relativos ao diretório do executável.
+      - name: Empacotar consumer (.exe + estáticos)
+        if: matrix.app == 'consumer'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/${{ matrix.binary }}", "apps/consumer/public" -DestinationPath "dist/${{ matrix.artifact }}" -Force
+
+      - name: Publicar asset no GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/${{ matrix.artifact }}
+          fail_on_unmatched_files: true

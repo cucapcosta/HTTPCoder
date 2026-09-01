@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.github
+docs
+# Código-fonte dos apps que não rodam no servidor (os package.json deles ainda são
+# copiados explicitamente no Dockerfile, antes deste ignore se aplicar ao COPY *)
+apps/host/src
+apps/consumer/src
+apps/consumer/web
+apps/consumer/public
+packages/protocol/test
