@@ -71,13 +71,17 @@ async function main(): Promise<void> {
     fingerprintPin: config.fingerprintPin,
     identity,
   });
-  new Bridge({ session, sandbox, permissions, hub: gui });
+  new Bridge({ session, sandbox, permissions, hub: gui, configPath });
 
+  session.on('fingerprint-confirm', ({ fingerprint }: { fingerprint: string }) => {
+    console.log('============================================================');
+    console.log(`[consumer] fingerprint da sessão: ${fingerprint}`);
+    console.log('[consumer] confirme que o host exibe o MESMO fingerprint.');
+    console.log('[consumer] confirme ou aborte na GUI; ao confirmar, o pin é gravado no config (TOFU).');
+    console.log('============================================================');
+  });
   session.on('ready', ({ fingerprint }: { fingerprint: string }) => {
     console.log(`[consumer] conectado ao host. fingerprint da sessão: ${fingerprint}`);
-    if (!config.fingerprintPin) {
-      console.log('[consumer] primeira conexão: confira o fingerprint com o host e fixe "fingerprintPin" no config (TOFU).');
-    }
   });
   session.on('fingerprint-mismatch', ({ expected, actual }: { expected: string; actual: string }) => {
     console.error(`[consumer] ALERTA: fingerprint mudou! pin=${expected} atual=${actual}. Conexão abortada.`);

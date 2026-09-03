@@ -40,7 +40,8 @@ function defaultBackoff(attempt: number): number {
  *
  * Eventos:
  *  - 'status' (SessionStatus)
- *  - 'ready' ({ fingerprint }) — handshake concluído e pin conferido
+ *  - 'ready' ({ fingerprint }) — handshake concluído e pin conferido (ou fingerprint confirmado pelo usuário)
+ *  - 'fingerprint-confirm' ({ fingerprint }) — sem pin: aguarda resolveFingerprint() para liberar a sessão
  *  - 'fingerprint-mismatch' ({ expected, actual }) — pin TOFU divergente; a sessão aborta
  *  - 'message' (AppMessage) — mensagem de aplicação descriptografada
  *  - 'error' (Error)
@@ -58,6 +59,8 @@ export class Session extends EventEmitter {
   private closed = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private status: SessionStatus = 'disconnected';
+  /** Fingerprint aguardando decisão TOFU do usuário (sem pin configurado) */
+  private pendingFingerprint?: string;
 
   constructor(opts: SessionOptions) {
     super();
@@ -94,6 +97,7 @@ export class Session extends EventEmitter {
       this.setStatus('connected');
       // chave de sessão reiniciada a cada conexão; a identidade permanece a mesma
       this.sessionKey = undefined;
+      this.pendingFingerprint = undefined;
       ws.send(serialize({ type: 'hello', role: 'consumer', room: hashRoom(this.opts.roomCode) }));
       this.sendHandshake(ws);
     };
@@ -130,6 +134,7 @@ export class Session extends EventEmitter {
 
     ws.onclose = () => {
       this.sessionKey = undefined;
+      this.pendingFingerprint = undefined;
       this.setStatus('disconnected');
       if (this.closed || this.opts.reconnect === false) return;
       this.attempts += 1;
@@ -143,11 +148,33 @@ export class Session extends EventEmitter {
 
   /** Envia mensagem de aplicação criptografada. Lança se a sessão não estiver pronta. */
   sendApp(msg: AppMessage): void {
+    if (this.pendingFingerprint !== undefined) {
+      throw new Error('aguardando confirmação do fingerprint (TOFU)');
+    }
     if (!this.sessionKey || !this.ws || this.ws.readyState !== this.ws.OPEN) {
       throw new Error('sessão ainda não está pronta (handshake pendente)');
     }
     const frame = encrypt(this.sessionKey, Buffer.from(serialize(msg), 'utf8'));
     this.ws.send(serialize({ type: 'frame', data: frame.toString('base64') }));
+  }
+
+  /**
+   * Decisão TOFU do usuário sobre o fingerprint exibido (evento 'fingerprint-confirm'):
+   * 'confirm' libera a sessão (evento 'ready'); 'abort' fecha a conexão.
+   * No-op quando não há confirmação pendente.
+   */
+  resolveFingerprint(decision: 'confirm' | 'abort'): void {
+    if (this.pendingFingerprint === undefined) return;
+    const fp = this.pendingFingerprint;
+    this.pendingFingerprint = undefined;
+    if (decision === 'abort') {
+      this.sessionKey = undefined;
+      this.closed = true;
+      this.ws?.close();
+      return;
+    }
+    this.setStatus('ready');
+    this.emit('ready', { fingerprint: fp });
   }
 
   close(): void {
@@ -177,12 +204,28 @@ export class Session extends EventEmitter {
       this.ws?.close();
       return;
     }
+    if (this._fingerprint === fp && (this.pendingFingerprint !== undefined || this.status === 'ready')) {
+      // handshake duplicado na mesma conexão (ex.: re-handshake em peer-connected):
+      // a chave é idêntica — mantém o estado (gate TOFU ou ready) sem re-emitir eventos
+      return;
+    }
     this._fingerprint = fp;
+    if (!pin) {
+      // TOFU sem pin: gateia a sessão até o usuário confirmar o fingerprint
+      this.pendingFingerprint = fp;
+      this.emit('fingerprint-confirm', { fingerprint: fp });
+      return;
+    }
     this.setStatus('ready');
     this.emit('ready', { fingerprint: fp });
   }
 
   private handleFrame(dataB64: string): void {
+    if (this.pendingFingerprint !== undefined) {
+      // frames de aplicação antes da decisão TOFU são descartados
+      console.warn('[consumer] frame descartado: aguardando confirmação do fingerprint (TOFU)');
+      return;
+    }
     if (!this.sessionKey) return;
     try {
       const plain = decrypt(this.sessionKey, Buffer.from(dataB64, 'base64'));

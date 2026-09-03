@@ -80,10 +80,18 @@ export class HostSession {
     });
   }
 
-  /** Envia AppMessage criptografada dentro de um frame do relay. */
+  /**
+   * Envia AppMessage criptografada dentro de um frame do relay.
+   * Gate TOFU: com a confirmação do fingerprint pendente, descarta com log —
+   * o handshake é a única mensagem que sai antes da confirmação.
+   */
   send(msg: AppMessage): void {
-    if (!this.established || !this.sessionKey || !this.ws) {
+    if (!this.sessionKey || !this.ws) {
       throw new Error('sessão não estabelecida: handshake ainda não completou');
+    }
+    if (!this.established) {
+      this.log('frame descartado: confirmação do fingerprint ainda pendente');
+      return;
     }
     const frame = encrypt(this.sessionKey, Buffer.from(serialize(msg), 'utf8'));
     this.ws.send(serialize({ type: 'frame', data: frame.toString('base64') }));
@@ -132,7 +140,7 @@ export class HostSession {
         break;
       case 'frame': {
         if (!this.established || !this.sessionKey) {
-          this.log('frame recebido antes do handshake completo; ignorando');
+          this.log('frame recebido antes da confirmação do fingerprint; descartando');
           return;
         }
         const plain = decrypt(this.sessionKey, Buffer.from(msg.data, 'base64')).toString('utf8');
@@ -164,6 +172,19 @@ export class HostSession {
           'Possível MITM ou consumer reinstalado; abortando.',
       );
     }
+
+    // O fingerprint = hash(pubHost ‖ pubConsumer ‖ roomCode): o consumer só
+    // consegue calculá-lo e exibi-lo depois de receber nossa chave pública.
+    // Por isso o handshake sai ANTES de qualquer confirmação do usuário.
+    this.sessionKey = sessionKey;
+    ws.send(
+      serialize({
+        type: 'handshake',
+        role: 'host',
+        publicKey: this.identity.publicKey.toString('base64'),
+      }),
+    );
+
     if (this.pin === undefined) {
       const confirm = this.options.confirmFingerprint;
       const ok = confirm ? await confirm(fp) : false;
@@ -174,14 +195,6 @@ export class HostSession {
       this.options.savePin?.(fp);
     }
 
-    this.sessionKey = sessionKey;
-    ws.send(
-      serialize({
-        type: 'handshake',
-        role: 'host',
-        publicKey: this.identity.publicKey.toString('base64'),
-      }),
-    );
     this.established = true;
     this.attempts = 0;
     this.callbacks.onEstablished?.(fp);

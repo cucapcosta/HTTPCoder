@@ -4,8 +4,20 @@ import type { AppMessage, ToolCallMessage } from '@httpcoder/protocol';
 import type { PermissionEngine, AskRequest, UserDecision } from './permissions.js';
 import type { Sandbox } from './sandbox.js';
 import type { Session, SessionStatus } from './session.js';
+import { saveFingerprintPin } from './config.js';
 
-/** Mensagens JSON trocadas com a GUI via WebSocket local. */
+/**
+ * Mensagens JSON trocadas com a GUI via WebSocket local.
+ *
+ * Outbound (consumer → GUI): status, models, token, final, tool-result,
+ *   permission-request, fingerprint-confirm, fingerprint-mismatch, error.
+ * Inbound (GUI → consumer): prompt, permission-result, fingerprint-result.
+ *
+ * TOFU sem pin: outbound `{"type":"fingerprint-confirm","fingerprint"}`
+ * (a sessão fica gateada até a decisão); inbound
+ * `{"type":"fingerprint-result","decision":"confirm"|"abort"}` —
+ * "confirm" libera a sessão e grava o pin no config; "abort" fecha a conexão.
+ */
 export type GuiMessage = Record<string, unknown> & { type: string };
 
 /** Interface mínima do lado da GUI (implementada pelo gui-server; stubada nos testes). */
@@ -18,6 +30,8 @@ export interface BridgeOptions {
   sandbox: Sandbox;
   permissions: PermissionEngine;
   hub: GuiHub;
+  /** Caminho do consumer.config.json; ao confirmar o fingerprint (TOFU), o pin é gravado nele */
+  configPath?: string;
 }
 
 /**
@@ -31,22 +45,30 @@ export class Bridge {
   private readonly sandbox: Sandbox;
   private readonly permissions: PermissionEngine;
   private readonly hub: GuiHub;
+  private readonly configPath?: string;
+  /** Fingerprint pendente de confirmação TOFU (sem pin), para reenviar a navegadores recém-conectados */
+  private pendingFingerprint?: string;
 
   constructor(opts: BridgeOptions) {
     this.session = opts.session;
     this.sandbox = opts.sandbox;
     this.permissions = opts.permissions;
     this.hub = opts.hub;
+    this.configPath = opts.configPath;
 
     // --- GUI → host / permissões ---
     this.hub.on('prompt', (msg: GuiMessage) => this.handlePrompt(msg));
     this.hub.on('permission-result', (msg: GuiMessage) => {
       this.permissions.resolve(String(msg.requestId), msg.decision as UserDecision);
     });
+    this.hub.on('fingerprint-result', (msg: GuiMessage) => this.handleFingerprintResult(msg));
     this.hub.on('client-connected', () => {
       // novo navegador aberto: sincroniza estado atual
       this.hub.broadcast({ type: 'status', state: this.sessionStatus, fingerprint: this.session.fingerprint });
       if (this.lastModels) this.hub.broadcast({ type: 'models', models: this.lastModels });
+      if (this.pendingFingerprint) {
+        this.hub.broadcast({ type: 'fingerprint-confirm', fingerprint: this.pendingFingerprint });
+      }
     });
 
     // --- host → GUI ---
@@ -55,6 +77,10 @@ export class Bridge {
       this.sessionStatus = status;
       this.hub.broadcast({ type: 'status', state: status, fingerprint: this.session.fingerprint });
       if (status === 'ready') this.session.sendApp({ type: 'model-list-request' });
+    });
+    this.session.on('fingerprint-confirm', ({ fingerprint }: { fingerprint: string }) => {
+      this.pendingFingerprint = fingerprint;
+      this.hub.broadcast({ type: 'fingerprint-confirm', fingerprint });
     });
     this.session.on('fingerprint-mismatch', (mismatch) => {
       this.hub.broadcast({ type: 'fingerprint-mismatch', ...mismatch });
@@ -71,6 +97,25 @@ export class Bridge {
 
   private sessionStatus: SessionStatus = 'disconnected';
   private lastModels?: string[];
+
+  /** Decisão TOFU vinda da GUI: repassa à sessão; ao confirmar, grava o pin no config. */
+  private handleFingerprintResult(msg: GuiMessage): void {
+    const decision = msg.decision;
+    if (decision !== 'confirm' && decision !== 'abort') return;
+    const fingerprint = this.pendingFingerprint ?? this.session.fingerprint;
+    this.pendingFingerprint = undefined;
+    this.session.resolveFingerprint(decision);
+    if (decision === 'confirm' && this.configPath && fingerprint) {
+      try {
+        saveFingerprintPin(this.configPath, fingerprint);
+      } catch (err) {
+        this.hub.broadcast({
+          type: 'error',
+          message: `falha ao gravar fingerprintPin no config: ${err instanceof Error ? err.message : err}`,
+        });
+      }
+    }
+  }
 
   private handlePrompt(msg: GuiMessage): void {
     if (typeof msg.text !== 'string' || msg.text.length === 0) return;

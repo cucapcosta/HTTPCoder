@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 export interface ConsumerConfig {
   /** URL do relay, ex.: wss://httpcoder.up.railway.app/ws */
@@ -62,4 +62,14 @@ export function loadConfig(configPath?: string): ConsumerConfig {
   if (typeof obj.fingerprintPin === 'string') config.fingerprintPin = obj.fingerprintPin;
   if (typeof obj.commandTimeoutMs === 'number') config.commandTimeoutMs = obj.commandTimeoutMs;
   return config;
+}
+
+/**
+ * Fixa o fingerprint no arquivo de config (TOFU), preservando os demais campos.
+ * Regrava o JSON indentado (2 espaços).
+ */
+export function saveFingerprintPin(configPath: string, pin: string): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  raw.fingerprintPin = pin;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`);
 }

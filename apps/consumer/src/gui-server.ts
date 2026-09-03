@@ -55,6 +55,8 @@ class GuiServerImpl extends EventEmitter implements GuiServer {
  * Servidor local da GUI: HTTP em 127.0.0.1 servindo o bundle React
  * e WebSocket (lib ws) para os eventos JSON da interface.
  * Mensagens vindas da GUI são re-emitidas como eventos (msg.type) no objeto retornado.
+ * Tipos de mensagem documentados em bridge.ts (GuiMessage) — inclui o fluxo TOFU
+ * fingerprint-confirm (outbound) / fingerprint-result (inbound).
  */
 export function createGuiServer(opts: GuiServerOptions): Promise<GuiServer> {
   const server: Server = createServer((req, res) => {

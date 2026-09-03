@@ -113,6 +113,11 @@ export class FakeRelayConsumer {
     });
   }
 
+  /** Número de sockets atualmente abertos no relay. */
+  get activeConnections(): number {
+    return this.sockets.size;
+  }
+
   /** Derruba a conexão atual do host (simula queda de rede). */
   dropHost(): void {
     for (const socket of this.sockets) socket.terminate();

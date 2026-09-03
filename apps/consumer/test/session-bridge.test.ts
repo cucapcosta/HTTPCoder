@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
@@ -149,6 +149,8 @@ describe('session + bridge com relay e host fake', () => {
       roomCode: ROOM_CODE,
       reconnect: false,
     });
+    // sem pin configurado, a sessão gateia até a decisão TOFU: auto-confirma nos testes do fluxo principal
+    session.on('fingerprint-confirm', () => session.resolveFingerprint('confirm'));
     new Bridge({ session, sandbox, permissions, hub });
     // registra os waits ANTES de conectar: o host emite 'ready' antes da sessão
     const sessionReady = once(session, 'ready');
@@ -298,5 +300,167 @@ describe('session — TOFU', () => {
     s.close();
     host.close();
     await new Promise((r) => relay.wss.close(r));
+  }, 15000);
+
+  it('fingerprintPin correto não emite fingerprint-confirm e fica pronta direto', async () => {
+    const relay = await startFakeRelay();
+    const host = new FakeHost(relay.url);
+    const identity = generateIdentity();
+    const s = new Session({
+      serverUrl: relay.url,
+      roomCode: ROOM_CODE,
+      fingerprintPin: host.fingerprintOf(identity.publicKey),
+      identity,
+      reconnect: false,
+    });
+    let confirmFired = false;
+    s.on('fingerprint-confirm', () => {
+      confirmFired = true;
+    });
+    s.connect();
+    const [ready] = await once(s, 'ready');
+    expect(confirmFired).toBe(false);
+    expect(ready.fingerprint).toBe(host.fingerprintOf(identity.publicKey));
+    expect(s.ready).toBe(true);
+    s.close();
+    host.close();
+    await new Promise((r) => relay.wss.close(r));
+  }, 15000);
+
+  it('sem pin: emite fingerprint-confirm, gateia frames até a decisão e confirm libera o envio', async () => {
+    const relay = await startFakeRelay();
+    const host = new FakeHost(relay.url);
+    const s = new Session({ serverUrl: relay.url, roomCode: ROOM_CODE, reconnect: false });
+    let readyFired = false;
+    s.on('ready', () => {
+      readyFired = true;
+    });
+    const confirmP = once(s, 'fingerprint-confirm');
+    s.connect();
+    const [ev] = (await confirmP) as [{ fingerprint: string }];
+    expect(ev.fingerprint).toBeTruthy();
+    expect(s.fingerprint).toBe(ev.fingerprint);
+    // ainda não está pronta: envio gateado
+    expect(readyFired).toBe(false);
+    expect(s.ready).toBe(false);
+    expect(() => s.sendApp({ type: 'prompt', id: 'p1', text: 'oi' })).toThrow(/fingerprint/i);
+    // frames recebidos antes da decisão são descartados
+    let msgReceived = false;
+    s.on('message', () => {
+      msgReceived = true;
+    });
+    host.sendApp({ type: 'token', id: 'p1', text: 'segredo' });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(msgReceived).toBe(false);
+    // confirm libera a sessão
+    const readyP = once(s, 'ready');
+    s.resolveFingerprint('confirm');
+    await readyP;
+    expect(readyFired).toBe(true);
+    expect(s.ready).toBe(true);
+    const received = host.nextApp();
+    s.sendApp({ type: 'prompt', id: 'p2', text: 'liberado' });
+    const msg = (await received) as AppMessage;
+    expect(msg.type).toBe('prompt');
+    s.close();
+    host.close();
+    await new Promise((r) => relay.wss.close(r));
+  }, 15000);
+
+  it("resolveFingerprint('abort') fecha a conexão sem ficar pronta", async () => {
+    const relay = await startFakeRelay();
+    const host = new FakeHost(relay.url);
+    const s = new Session({ serverUrl: relay.url, roomCode: ROOM_CODE, reconnect: false });
+    let readyFired = false;
+    s.on('ready', () => {
+      readyFired = true;
+    });
+    const confirmP = once(s, 'fingerprint-confirm');
+    s.connect();
+    await confirmP;
+    const statusP = once(s, 'status');
+    s.resolveFingerprint('abort');
+    const [status] = await statusP;
+    expect(status).toBe('disconnected');
+    expect(readyFired).toBe(false);
+    expect(s.ready).toBe(false);
+    s.close();
+    host.close();
+    await new Promise((r) => relay.wss.close(r));
+  }, 15000);
+});
+
+describe('bridge — fingerprint-result da GUI (TOFU)', () => {
+  let relay: { wss: WebSocketServer; url: string };
+  let host: FakeHost;
+  let dir: string;
+
+  beforeAll(async () => {
+    relay = await startFakeRelay();
+    host = new FakeHost(relay.url);
+    dir = await mkdtemp(path.join(tmpdir(), 'consumer-tofu-'));
+  });
+
+  afterAll(async () => {
+    host.close();
+    await new Promise((r) => relay.wss.close(r));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function setupBridge(configName: string): Promise<{ session: Session; hub: StubHub; configFile: string }> {
+    const configFile = path.join(dir, configName);
+    await writeFile(
+      configFile,
+      JSON.stringify({ serverUrl: relay.url, roomCode: ROOM_CODE, allowedPaths: [dir], allowedCommands: [] }),
+    );
+    const sandbox = await Sandbox.create({ allowedPaths: [dir], allowedCommands: [], cwd: dir });
+    const hub = new StubHub();
+    const session = new Session({ serverUrl: relay.url, roomCode: ROOM_CODE, reconnect: false });
+    new Bridge({ session, sandbox, permissions: new PermissionEngine(), hub, configPath: configFile });
+    session.connect();
+    return { session, hub, configFile };
+  }
+
+  it('decisão confirm libera a sessão e grava o pin no config', async () => {
+    const { session, hub, configFile } = await setupBridge('confirm.json');
+    const card = await hub.waitFor('fingerprint-confirm');
+    expect(card.fingerprint).toBeTruthy();
+    expect(session.ready).toBe(false);
+
+    // envio liberado: model-list-request automático + prompt da GUI chegam ao host
+    // (listener anexado ANTES da decisão: o frame pode chegar no mesmo tick do ready)
+    const firstP = host.nextApp();
+    const readyP = once(session, 'ready');
+    hub.emit('fingerprint-result', { type: 'fingerprint-result', decision: 'confirm' });
+    await readyP;
+    expect(session.ready).toBe(true);
+
+    // pin gravado em arquivo real, preservando os demais campos
+    const saved = JSON.parse(await readFile(configFile, 'utf8')) as Record<string, unknown>;
+    expect(saved.fingerprintPin).toBe(session.fingerprint);
+    expect(saved.roomCode).toBe(ROOM_CODE);
+
+    const first = (await firstP) as AppMessage;
+    expect(first.type).toBe('model-list-request');
+    const promptP = host.nextApp();
+    hub.emit('prompt', { type: 'prompt', text: 'pós-confirm' });
+    const prompt = (await promptP) as AppMessage;
+    expect(prompt.type).toBe('prompt');
+    session.close();
+  }, 15000);
+
+  it('decisão abort fecha a sessão e não grava pin', async () => {
+    const { session, hub, configFile } = await setupBridge('abort.json');
+    await hub.waitFor('fingerprint-confirm');
+
+    const statusP = once(session, 'status');
+    hub.emit('fingerprint-result', { type: 'fingerprint-result', decision: 'abort' });
+    const [status] = await statusP;
+    expect(status).toBe('disconnected');
+    expect(session.ready).toBe(false);
+
+    const saved = JSON.parse(await readFile(configFile, 'utf8')) as Record<string, unknown>;
+    expect(saved.fingerprintPin).toBeUndefined();
+    session.close();
   }, 15000);
 });

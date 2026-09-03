@@ -9,6 +9,7 @@ type GuiInbound =
   | { type: 'models'; models: string[] }
   | { type: 'permission-request'; requestId: string; tool: string; target: string; args: Record<string, unknown>; diff?: { before: string; after: string } }
   | { type: 'tool-result'; callId: string; name: string; ok: boolean; output: string }
+  | { type: 'fingerprint-confirm'; fingerprint: string }
   | { type: 'fingerprint-mismatch'; expected: string; actual: string }
   | { type: 'error'; message: string };
 
@@ -41,6 +42,7 @@ function App() {
   const [model, setModel] = useState('');
   const [status, setStatus] = useState('disconnected');
   const [fp, setFp] = useState<string | undefined>();
+  const [fpConfirm, setFpConfirm] = useState<string | undefined>();
   const [alert, setAlert] = useState('');
   const [input, setInput] = useState('');
   const wsRef = useRef<WebSocket | null>(null);
@@ -84,6 +86,9 @@ function App() {
         case 'permission-request':
           setCards((prev) => [...prev, msg]);
           break;
+        case 'fingerprint-confirm':
+          setFpConfirm(msg.fingerprint);
+          break;
         case 'tool-result':
           setMessages((prev) => [
             ...prev,
@@ -114,6 +119,12 @@ function App() {
   const decide = (card: PermissionCard, decision: 'once' | 'always' | 'deny') => {
     send({ type: 'permission-result', requestId: card.requestId, decision });
     setCards((prev) => prev.filter((c) => c.requestId !== card.requestId));
+  };
+
+  const decideFingerprint = (decision: 'confirm' | 'abort') => {
+    send({ type: 'fingerprint-result', decision });
+    setFpConfirm(undefined);
+    if (decision === 'abort') setAlert('Conexão abortada pelo usuário (fingerprint não confirmado).');
   };
 
   const submit = (e: React.FormEvent) => {
@@ -147,6 +158,21 @@ function App() {
       </header>
       {alert && <div id="banner" style={{ display: 'block' }}>{alert}</div>}
       <div id="messages" ref={listRef}>
+        {fpConfirm && (
+          <div className="perm">
+            <h3>Confirmar fingerprint do host</h3>
+            <div className="target">Confirme que o host exibe o MESMO fingerprint:</div>
+            <pre className="target" style={{ fontSize: 16, letterSpacing: 1 }}>{fpConfirm}</pre>
+            <div className="actions">
+              <button className="once" onClick={() => decideFingerprint('confirm')}>
+                Confirmar
+              </button>
+              <button className="deny" onClick={() => decideFingerprint('abort')}>
+                Abortar
+              </button>
+            </div>
+          </div>
+        )}
         {messages.map((m) => (
           <div key={m.key} className={`msg ${m.role}`}>
             {m.text}

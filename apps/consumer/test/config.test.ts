@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, saveFingerprintPin } from '../src/config.js';
 
 let dir: string | undefined;
 
@@ -59,5 +59,23 @@ describe('loadConfig', () => {
   it('falha quando falta campo obrigatório', async () => {
     const file = await writeConfig({ serverUrl: 'wss://x' });
     expect(() => loadConfig(file)).toThrow(/roomCode/);
+  });
+});
+
+describe('saveFingerprintPin', () => {
+  it('grava o pin preservando os demais campos, com indentação', async () => {
+    const file = await writeConfig({ ...valid, guiPort: 9999, custom: 'preservar' });
+    saveFingerprintPin(file, 'AA BB CC DD');
+
+    const text = await readFile(file, 'utf8');
+    const raw = JSON.parse(text) as Record<string, unknown>;
+    expect(raw.fingerprintPin).toBe('AA BB CC DD');
+    expect(raw.serverUrl).toBe(valid.serverUrl);
+    expect(raw.guiPort).toBe(9999);
+    expect(raw.custom).toBe('preservar');
+    // regrava indentado (2 espaços), não minificado
+    expect(text).toContain('\n  "fingerprintPin"');
+    // o pin gravado é carregável pelo loadConfig
+    expect(loadConfig(file).fingerprintPin).toBe('AA BB CC DD');
   });
 });

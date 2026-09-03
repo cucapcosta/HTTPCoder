@@ -195,6 +195,8 @@ async function startStack(chatScript: string[][]): Promise<Stack> {
     backoffMs: () => 50,
   });
   session.on('error', (err) => consumerErrors.push(err));
+  // TOFU: sem pin no config, a sessão gateia até a decisão do usuário — a E2E auto-confirma
+  session.on('fingerprint-confirm', () => session.resolveFingerprint('confirm'));
   const sandbox = await Sandbox.create({
     allowedPaths: [dir],
     allowedCommands: ['echo'],

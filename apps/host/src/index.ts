@@ -11,7 +11,7 @@ async function confirmFingerprint(fp: string): Promise<boolean> {
   console.log('');
   console.log('Primeira conexão com este consumer. Fingerprint da sessão:');
   console.log(`  ${fp}`);
-  console.log('Confirme que o consumer exibe o MESMO fingerprint antes de prosseguir.');
+  console.log('Confirme no consumer (terminal ou GUI) que o fingerprint é o MESMO antes de prosseguir.');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await rl.question('Os fingerprints batem? [s/N] ');

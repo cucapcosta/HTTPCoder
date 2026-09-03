@@ -96,6 +96,8 @@ describe('identidade persistente na Session (fingerprint estável entre reiníci
       // cada iteração simula um "reinício" do consumer com o mesmo config
       const identity = loadOrCreateIdentity(configPath);
       const session = new Session({ serverUrl: url, roomCode: ROOM_CODE, reconnect: false, identity });
+      // sem pin no config, a sessão gateia até a confirmação TOFU do usuário
+      session.on('fingerprint-confirm', () => session.resolveFingerprint('confirm'));
       session.connect();
       const [{ fingerprint }] = (await once(session, 'ready')) as [{ fingerprint: string }];
       fingerprints.push(fingerprint);
